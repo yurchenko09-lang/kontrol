@@ -1,12 +1,16 @@
 import { auth, db, $, esc, toast, fmtTime, LETTERS, OPT, isAnswered, toMs } from "./common.js";
-import { SITE_TITLE } from "./firebase-config.js";
 import { signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   doc, getDoc, onSnapshot, runTransaction, serverTimestamp, updateDoc, increment,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app = $("#app");
-$("#siteTitle").textContent = SITE_TITLE;
+// у шапці: «Контроль знань · <предмет тесту>»
+function setHeader(subject) {
+  const t = subject ? `Контроль знань · ${subject}` : "Контроль знань";
+  $("#siteTitle").textContent = t; document.title = `${t} · ІФК НУБіП України`;
+}
+setHeader();
 
 let cfg = null, uid = null, sessRef = null, sess = null, items = [];
 let answers = {}, deadline = 0, clockOffset = 0, tick = null, saveTimer = null;
@@ -24,6 +28,7 @@ async function init() {
   onSnapshot(doc(db, "open", CODE), (snap) => {
     if (!snap.exists()) { if (!started) showMsg("Посилання недійсне", "Перевірте посилання або попросіть у викладача нове."); return; }
     cfg = snap.data();
+    setHeader(cfg.subjectName);
     if (!started) route();
   }, (e) => fatal(e));
 }
@@ -166,6 +171,7 @@ function renderTest() {
     <section class="q" data-id="${q.id}" data-i="${i}">
       <div class="qhead">Питання ${i + 1} з ${items.length}</div>
       <div class="qt">${esc(q.type === "open" ? splitParts(q.text) : q.text)}</div>
+      ${q.image ? `<div class="qimg"><img src="${esc(q.image)}" alt="Зображення до питання" draggable="false"></div>` : ""}
       ${hint(q)}
       ${renderInput(q)}
     </section>`).join("");
