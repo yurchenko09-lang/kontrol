@@ -300,23 +300,38 @@ function onTick() {
   if (left <= 0 && !finished) submit(true);
 }
 
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("timeout"), { code: "timeout" })), ms))]);
+
 async function submit(auto) {
   if (finished) return;
   finished = true; clearInterval(tick); clearTimeout(saveTimer);
   items.forEach((q) => { if (app.querySelector(`.q[data-id="${q.id}"]`)) answers[q.id] = read(q); });
-  app.innerHTML = `<div class="card center"><div class="spinner"></div><p>Надсилання відповідей…</p></div>`;
-  for (let i = 0; i < 4; i++) {
-    try {
-      await updateDoc(sessRef, { answers, submitted: true, submittedAt: serverTimestamp(), updatedAt: serverTimestamp() });
-      return showDone(auto);
-    } catch (e) {
+  app.innerHTML = `<div class="card center"><div class="spinner"></div><p>Надсилання відповідей…</p><p class="tiny muted" id="sendNote"></p></div>`;
+
+  // запис ставиться в чергу SDK і дійде на сервер, щойно буде зв'язок;
+  // стежимо за підтвердженням від сервера, щоб не «висіти» без кінця
+  let done = false;
+  const unsub = onSnapshot(sessRef, { includeMetadataChanges: true }, (snap) => {
+    const d = snap.data();
+    if (!done && d?.submitted && !snap.metadata.hasPendingWrites) { done = true; unsub(); showDone(auto); }
+  }, () => {});
+  const write = updateDoc(sessRef, { answers, submitted: true, submittedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+  write.then(() => { if (!done) { done = true; unsub(); showDone(auto); } })
+    .catch((e) => {
       console.error(e);
+      if (done) return;
+      done = true; unsub();
+      // відмова сервера = тест уже здано або час вийшов; збережені відповіді зараховано
       if (String(e.code).includes("permission")) return showDone(true);
-      await new Promise((r) => setTimeout(r, 1500));
-    }
-  }
+      sendFailed(auto);
+    });
+  // якщо за 12 с немає підтвердження — підказка; запис при цьому не скасовується
+  setTimeout(() => { if (!done) { const n = $("#sendNote"); if (n) n.innerHTML = "Повільний інтернет. <b>Не закривайте сторінку</b> — відповіді надішлються, щойно з'явиться зв'язок. Можна спробувати перемкнути Wi-Fi / мобільний інтернет."; } }, 12000);
+}
+
+function sendFailed(auto) {
   app.innerHTML = `<div class="card center"><h1>Не вдалося надіслати</h1>
-    <p>Перевірте інтернет і натисніть кнопку ще раз. Останні збережені відповіді вже є у викладача.</p>
+    <p>Перевірте інтернет і натисніть кнопку ще раз. Відповіді, збережені під час тесту, вже є у викладача.</p>
     <button class="btn primary" id="retry">Надіслати ще раз</button></div>`;
   $("#retry").onclick = () => { finished = false; submit(auto); };
 }
