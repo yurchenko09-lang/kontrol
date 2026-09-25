@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Контроль знань · ІФК НУБіП України</title>
+<link rel="icon" href="logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="student">
+<header class="top">
+  <img src="logo.png" alt="Ірпінський фаховий коледж НУБіП України" class="logo">
+  <div class="brand">
+    <div class="org">Ірпінський фаховий коледж НУБіП України</div>
+    <div class="site-title" id="siteTitle">Контроль знань</div>
+  </div>
+  <div class="bar" id="bar" hidden>
+    <div class="who" id="who"></div>
+    <div class="timer" id="timer">--:--</div>
+  </div>
+</header>
+
+<main id="app" class="wrap">
+  <div class="card center"><div class="spinner"></div><p>Завантаження…</p></div>
+</main>
+
+<div id="shield" class="shield" hidden>
+  <div class="shield-box">
+    <h2>Тест приховано</h2>
+    <p>Ви перейшли в інше вікно чи вкладку. Кожен такий вихід фіксується і буде видно викладачу.</p>
+    <button class="btn primary" id="shieldBtn">Повернутися до тесту</button>
+  </div>
+</div>
+
+<noscript><div class="card">Для роботи сайту увімкніть JavaScript.</div></noscript>
+<script type="module" src="student.js"></script>
+</body>
+</html>
