@@ -46,7 +46,7 @@ function showRegister() {
   const groups = (cfg.groups || []).filter(Boolean);
   app.innerHTML = `
   <div class="card reg">
-    <div class="pill">${cfg.kind === "test" ? "Тематична контрольна робота" : "Семінарське заняття"}</div>
+    <div class="pill">${cfg.subjectName ? esc(cfg.subjectName) + " · " : ""}${cfg.kind === "test" ? "Тематична контрольна робота" : "Семінарське заняття"}</div>
     <h1>${esc(cfg.title)}</h1>
     <p class="muted">Тривалість: <b>${cfg.durationMin} хв</b>${cfg.kind === "seminar" && cfg.qCount ? ` · питань: <b>${cfg.qCount}</b>` : ""}</p>
     <form id="reg" autocomplete="off">
