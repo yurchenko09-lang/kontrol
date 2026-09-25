@@ -63,10 +63,28 @@ async function loadBanks() {
 }
 
 // ---------------------------------------------------------------- current
+const STUDENT_URL = location.href.replace(/teacher\.html.*$/, "").replace(/[?#].*$/, "");
+function linkBlock() {
+  return `<div class="linkbox">
+    <div class="tiny muted">Посилання для студентів</div>
+    <div class="linkrow"><a href="${STUDENT_URL}" target="_blank" id="stuLink">${esc(STUDENT_URL)}</a>
+      <button class="btn small" id="copyLink">Копіювати</button>
+      <button class="btn small" id="qrBtn">QR-код</button></div>
+    <div id="qrBox" hidden></div>
+  </div>`;
+}
+function bindLinkBlock() {
+  $("#copyLink").onclick = async () => { try { await navigator.clipboard.writeText(STUDENT_URL); toast("Посилання скопійовано"); } catch { toast(STUDENT_URL, 6000); } };
+  $("#qrBtn").onclick = () => {
+    const box = $("#qrBox"); box.hidden = !box.hidden;
+    if (!box.hidden && !box.dataset.done && window.QRCode) { new QRCode(box, { text: STUDENT_URL, width: 220, height: 220 }); box.dataset.done = 1; }
+  };
+}
+
 function renderCurrent() {
   const c = $("#curCard");
   const gi = $("#of input[name=groups]"); if (gi && !gi.value && cfg.groups?.length) gi.value = cfg.groups.join(", ");
-  if (!cfg.sittingId) { c.innerHTML = `<h2>Поточний тест</h2><p class="muted">Жоден тест ще не відкривався.</p>`; return; }
+  if (!cfg.sittingId) { c.innerHTML = `<h2>Поточний тест</h2><p class="muted">Жоден тест ще не відкривався.</p>${linkBlock()}`; bindLinkBlock(); return; }
   c.innerHTML = `<h2>Поточний тест</h2>
     <div class="status ${cfg.active ? "on" : "off"}">${cfg.active ? "● Реєстрацію відкрито" : "● Реєстрацію закрито"}</div>
     <p class="big-title">${esc(cfg.title)}</p>
@@ -77,7 +95,9 @@ function renderCurrent() {
         ? `<button class="btn danger" id="closeBtn">Закрити реєстрацію</button>`
         : `<button class="btn" id="reopenBtn">Відкрити реєстрацію знову</button>`}
     </div>
-    <p class="tiny muted">Закриття реєстрації не зупиняє тих, хто вже почав: вони дописують до кінця свого часу.</p>`;
+    <p class="tiny muted">Закриття реєстрації не зупиняє тих, хто вже почав: вони дописують до кінця свого часу.</p>
+    ${linkBlock()}`;
+  bindLinkBlock();
   $("#closeBtn")?.addEventListener("click", () => updateDoc(doc(db, "config", "current"), { active: false }));
   $("#reopenBtn")?.addEventListener("click", () => updateDoc(doc(db, "config", "current"), { active: true }));
 }

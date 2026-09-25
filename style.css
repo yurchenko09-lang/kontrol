@@ -126,3 +126,8 @@ body.veiled #app { filter: blur(14px); }
   .q { padding: 14px; gap: 10px; }
   .submit-row { flex-direction: column; align-items: stretch; } .submit-row .btn.big { width: 100%; }
 }
+
+.linkbox { margin-top: 16px; padding: 12px 14px; background: #f6f9ff; border: 1px solid var(--line); border-radius: 10px; }
+.linkrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.linkrow a { font-weight: 700; color: var(--blue); word-break: break-all; margin-right: auto; }
+#qrBox { margin-top: 12px; } #qrBox img, #qrBox canvas { border: 8px solid #fff; }
