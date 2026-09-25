@@ -131,3 +131,18 @@ body.veiled #app { filter: blur(14px); }
 .linkrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 .linkrow a { font-weight: 700; color: var(--blue); word-break: break-all; margin-right: auto; }
 #qrBox { margin-top: 12px; } #qrBox img, #qrBox canvas { border: 8px solid #fff; }
+
+/* одне питання на сторінці */
+.q { display: none; flex-direction: column; gap: 0; }
+.q.active { display: block; }
+.qhead { font-size: .8rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--blue); margin-bottom: 8px; }
+.q .qt { font-size: 1.05rem; font-weight: 600; line-height: 1.55; }
+.hint { font-size: .85rem; color: var(--muted); background: #f6f9ff; border-left: 3px solid var(--yellow); padding: 6px 10px; border-radius: 6px; margin: 0 0 12px; }
+.qnav { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.qdot { width: 36px; height: 36px; border-radius: 9px; border: 1.5px solid var(--line); background: #fff; font: inherit; font-weight: 700; cursor: pointer; color: var(--ink); }
+.qdot.done { background: var(--green); border-color: var(--green); color: #fff; }
+.qdot.cur { outline: 3px solid var(--blue); outline-offset: 1px; }
+.pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; }
+.pager .btn { min-width: 150px; padding: 12px 18px; }
+.submit-row { border-top: 1px dashed var(--line); padding-top: 16px; }
+@media (max-width: 760px) { .pager .btn { min-width: 0; flex: 1; } .pager #saveState { display: none; } .qdot { width: 32px; height: 32px; } }

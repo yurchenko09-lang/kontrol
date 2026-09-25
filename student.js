@@ -152,41 +152,74 @@ async function resume(data, fresh = false) {
 
 const now = () => Date.now() + clockOffset;
 
+let cur = 0;
 function renderTest() {
   $("#bar").hidden = false;
   $("#who").innerHTML = `<b>${esc(sess.name)}</b> · ${esc(sess.group)}${cfg.kind === "test" ? ` · варіант ${sess.variant}` : ""}`;
   const html = items.map((q, i) => `
-    <section class="q" data-id="${q.id}">
-      <div class="qn">${i + 1}</div>
-      <div class="qb">
-        <div class="qt">${esc(q.text)}</div>
-        ${renderInput(q)}
-      </div>
+    <section class="q" data-id="${q.id}" data-i="${i}">
+      <div class="qhead">Питання ${i + 1} з ${items.length}</div>
+      <div class="qt">${esc(q.type === "open" ? splitParts(q.text) : q.text)}</div>
+      ${hint(q)}
+      ${renderInput(q)}
     </section>`).join("");
   app.innerHTML = `
     <div class="test-head">
       <h1>${esc(cfg.title)}</h1>
+      <div class="qnav" id="qnav">${items.map((q, i) => `<button class="qdot" data-go="${i}" data-id="${q.id}">${i + 1}</button>`).join("")}</div>
       <div class="progress"><span id="prog"></span></div>
     </div>
     <div class="wm-host">
       <div class="wm" id="wm"></div>
       ${html}
     </div>
-    <div class="submit-row">
+    <div class="pager">
+      <button class="btn" id="prevBtn">← Попереднє</button>
       <span class="muted" id="saveState">Відповіді зберігаються автоматично</span>
+      <button class="btn primary" id="nextBtn">Наступне →</button>
+    </div>
+    <div class="submit-row">
+      <span class="tiny muted">Можна повертатися до будь-якого питання, натиснувши його номер угорі.</span>
       <button class="btn primary big" id="submitBtn">Завершити й надіслати</button>
     </div>`;
   paintWatermark();
-  // відновлення відповідей
   items.forEach((q) => restore(q, answers[q.id]));
   app.addEventListener("change", onAnswer);
   app.addEventListener("input", onAnswer);
+  $("#qnav").addEventListener("click", (e) => { const b = e.target.closest("[data-go]"); if (b) go(+b.dataset.go); });
+  $("#prevBtn").onclick = () => go(cur - 1);
+  $("#nextBtn").onclick = () => (cur < items.length - 1 ? go(cur + 1) : $("#submitBtn").click());
   $("#submitBtn").addEventListener("click", () => {
     const left = items.filter((q) => !isAnswered(q, answers[q.id])).length;
     const msg = left ? `Без відповіді залишилось питань: ${left}. Завершити тест?` : "Завершити тест і надіслати відповіді?";
     confirmBox(msg, () => submit(false));
   });
   updateProgress();
+  go(Math.min(Number(sessionStorageGet("cur")) || 0, items.length - 1));
+}
+
+function go(i) {
+  if (i < 0 || i >= items.length) return;
+  cur = i; sessionStorageSet("cur", i);
+  app.querySelectorAll(".q").forEach((el) => el.classList.toggle("active", +el.dataset.i === i));
+  app.querySelectorAll(".qdot").forEach((el) => el.classList.toggle("cur", +el.dataset.go === i));
+  $("#prevBtn").disabled = i === 0;
+  $("#nextBtn").textContent = i === items.length - 1 ? "Завершити ✓" : "Наступне →";
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  const ta = app.querySelector(`.q[data-i="${i}"] textarea`); if (ta && window.innerWidth > 760) setTimeout(() => ta.focus({ preventScroll: true }), 50);
+}
+function sessionStorageGet(k) { try { return sessionStorage.getItem("kz_" + k); } catch { return null; } }
+function sessionStorageSet(k, v) { try { sessionStorage.setItem("kz_" + k, v); } catch { /* ignore */ } }
+
+// розбиває «а) … б) …» та «1) … 2) …» на окремі рядки
+function splitParts(t) { return t.replace(/\s+([а-г]|\d)\)\s/g, "\n$1) "); }
+
+function hint(q) {
+  const h = { choice: "Оберіть одну правильну відповідь.",
+    match: "Для кожного пункту ліворуч (1, 2, 3…) виберіть відповідну літеру праворуч.",
+    seq: "Виберіть літери у правильному порядку: спочатку перший етап, потім другий і т. д.",
+    open: "Дайте відповідь своїми словами. Головне — суть, орфографія не оцінюється." }[q.type];
+  return h ? `<div class="hint">${h}</div>` : "";
 }
 
 function renderInput(q) {
@@ -240,7 +273,11 @@ function onAnswer(e) {
 
 function updateProgress() {
   const n = items.filter((q) => isAnswered(q, answers[q.id])).length;
-  items.forEach((q) => app.querySelector(`.q[data-id="${q.id}"]`)?.classList.toggle("done", isAnswered(q, answers[q.id])));
+  items.forEach((q) => {
+    const ok = isAnswered(q, answers[q.id]);
+    app.querySelector(`.q[data-id="${q.id}"]`)?.classList.toggle("done", ok);
+    app.querySelector(`.qdot[data-id="${q.id}"]`)?.classList.toggle("done", ok);
+  });
   const p = $("#prog"); if (p) { p.style.width = `${(100 * n) / items.length}%`; p.parentElement.dataset.label = `${n} / ${items.length}`; }
 }
 
