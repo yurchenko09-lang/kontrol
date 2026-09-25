@@ -43,3 +43,6 @@ export function isAnswered(item, a) {
   if (item.type === "open") return String(a).trim().length > 0;
   return true;
 }
+
+// Firestore Timestamp / Date / рядок → мілісекунди
+export const toMs = (v) => (v == null ? null : v.toMillis ? v.toMillis() : v instanceof Date ? v.getTime() : typeof v === "object" && "seconds" in v ? v.seconds * 1000 : new Date(v).getTime());

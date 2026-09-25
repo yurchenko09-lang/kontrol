@@ -1,4 +1,4 @@
-import { auth, db, $, esc, toast, fmtTime, LETTERS, OPT, isAnswered } from "./common.js";
+import { auth, db, $, esc, toast, fmtTime, LETTERS, OPT, isAnswered, toMs } from "./common.js";
 import { SITE_TITLE } from "./firebase-config.js";
 import { signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
@@ -35,8 +35,13 @@ async function route() {
   try { snap = await getDoc(sessRef); } catch { snap = null; }
   if (snap && snap.exists()) return resume(snap.data());
   if (!cfg.active) return showMsg("Реєстрацію на цей тест закрито", "Якщо ви ще не проходили тест — зверніться до викладача.");
+  const from = toMs(cfg.openFrom), to = toMs(cfg.closeAt);
+  if (from && Date.now() < from) return showMsg("Тест ще не відкрито", `Тест стане доступним ${fmtDate(from)}. Відкрийте це посилання пізніше.`);
+  if (to && Date.now() >= to) return showMsg("Термін виконання минув", `Тест треба було виконати до ${fmtDate(to)}. Якщо ви не встигли з поважної причини — зверніться до викладача.`);
   showRegister();
 }
+
+const fmtDate = (ms) => new Date(ms).toLocaleString("uk-UA", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
 
 function showMsg(title, text) {
   app.innerHTML = `<div class="card center"><h1>${esc(title)}</h1><p class="muted">${esc(text)}</p></div>`;
@@ -46,9 +51,10 @@ function showRegister() {
   const groups = (cfg.groups || []).filter(Boolean);
   app.innerHTML = `
   <div class="card reg">
-    <div class="pill">${cfg.subjectName ? esc(cfg.subjectName) + " · " : ""}${cfg.kind === "test" ? "Тематична контрольна робота" : "Семінарське заняття"}</div>
+    <div class="pill">${esc(cfg.subjectName || "Контроль знань")}${cfg.mode === "home" ? " · домашнє завдання" : ""}</div>
     <h1>${esc(cfg.title)}</h1>
     <p class="muted">Тривалість: <b>${cfg.durationMin} хв</b>${cfg.kind === "seminar" && cfg.qCount ? ` · питань: <b>${cfg.qCount}</b>` : ""}</p>
+    ${toMs(cfg.closeAt) ? `<div class="deadline">Домашнє завдання: виконати до <b>${fmtDate(toMs(cfg.closeAt))}</b>. Після натискання «Почати» у вас буде ${cfg.durationMin} хв${Date.now() + cfg.durationMin * 60000 > toMs(cfg.closeAt) ? ` — але не пізніше кінцевого терміну, тобто менше` : ""}. Починайте, коли матимете вільний час без перерв.</div>` : ""}
     <form id="reg" autocomplete="off">
       <label>Група
         ${groups.length
@@ -136,7 +142,7 @@ async function resume(data, fresh = false) {
   }
   if (data.submitted) return showDone();
   const durationMin = cfg.durationMin;
-  deadline = data.startedAt.toMillis() + durationMin * 60 * 1000;
+  deadline = Math.min(data.startedAt.toMillis() + durationMin * 60 * 1000, toMs(cfg.closeAt) || Infinity);
   if (now() >= deadline) return showDone(true);
 
   let v;

@@ -1,13 +1,13 @@
-import { auth, db, $, esc, toast, fmtTime, answerText, isAnswered, LETTERS } from "./common.js";
+import { auth, db, $, esc, toast, fmtTime, answerText, isAnswered, LETTERS, toMs } from "./common.js";
 import { TEACHER_EMAIL } from "./firebase-config.js";
 import { signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, collection, onSnapshot, writeBatch,
-  serverTimestamp, query, orderBy, limit,
+  serverTimestamp, query, orderBy, limit, where,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app = $("#app");
-let cfg = {}, subjects = [], banks = [], itemsCache = {};
+let subjects = [], banks = [], itemsCache = {};
 let unsubMon = null, monItems = {}, monSid = null, monTimer = null, monRows = [];
 let bankSubject = null; // вибраний предмет у блоці «Банк питань»
 
@@ -104,6 +104,7 @@ function estimate(itemsByVariant, kind, qCount) {
 }
 
 // ================================================================ DASHBOARD
+let activeList = [];
 async function dashboard() {
   app.innerHTML = `
   <div class="grid">
@@ -118,56 +119,77 @@ async function dashboard() {
   <div class="card" id="bankCard"></div>`;
   await loadAll();
   renderOpen(); renderSubjects(); renderBank(); renderExport();
-  onSnapshot(doc(db, "config", "current"), (s) => { cfg = s.data() || {}; renderCurrent(); startMonitor(cfg.sittingId); });
+  onSnapshot(query(collection(db, "sittings"), where("active", "==", true)), (snap) => {
+    activeList = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((x) => x.active)
+      .sort((a, b) => (toMs(b.createdAt) || 0) - (toMs(a.createdAt) || 0));
+    renderCurrent();
+    if (!monSid || !activeList.some((x) => x.id === monSid)) startMonitor(activeList[0]?.id || monSid || null);
+  }, showErr);
 }
 async function refreshAll() { await loadAll(); renderOpen(); renderSubjects(); renderBank(); }
 
-// ---------------------------------------------------------------- current
+// ---------------------------------------------------------------- відкриті тести
 const BASE_URL = location.href.replace(/teacher\.html.*$/, "").replace(/[?#].*$/, "");
 const testUrl = (code) => `${BASE_URL}?t=${code}`;
-function linkBlock(code) {
-  const url = testUrl(code);
-  return `<div class="linkbox">
-    <div class="tiny muted">Посилання для студентів — діє лише для цього тесту</div>
-    <div class="linkrow"><a href="${url}" target="_blank" id="stuLink">${esc(url)}</a>
-      <button class="btn small" id="copyLink">Копіювати</button>
-      <button class="btn small" id="qrBtn">QR-код</button></div>
-    <div id="qrBox" hidden></div>
-  </div>`;
+const fmtDT = (ms) => (ms ? new Date(ms).toLocaleString("uk-UA", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "");
+function windowText(x) {
+  const f = toMs(x.openFrom), t = toMs(x.closeAt);
+  if (x.mode !== "home") return "На занятті";
+  return `Домашнє: ${f ? "з " + fmtDT(f) + " " : ""}до ${fmtDT(t)}`;
 }
-function bindLinkBlock(code) {
-  const url = testUrl(code);
-  $("#copyLink").onclick = async () => { try { await navigator.clipboard.writeText(url); toast("Посилання скопійовано"); } catch { toast(url, 6000); } };
-  $("#qrBtn").onclick = () => {
-    const box = $("#qrBox"); box.hidden = !box.hidden;
-    if (!box.hidden && !box.dataset.done && window.QRCode) { new QRCode(box, { text: url, width: 240, height: 240 }); box.dataset.done = 1; }
-  };
-}
-async function setActive(active, c = cfg) {
-  if (!c.sittingId) return;
+async function setActive(active, x) {
   const batch = writeBatch(db);
-  batch.update(doc(db, "config", "current"), { active });
-  batch.update(doc(db, "sittings", c.sittingId), { active });
-  if (c.code) batch.update(doc(db, "open", c.code), { active });
+  batch.update(doc(db, "sittings", x.id), { active });
+  if (x.code) batch.update(doc(db, "open", x.code), { active });
   await batch.commit();
 }
 function renderCurrent() {
   const c = $("#curCard");
-  if (!cfg.sittingId) { c.innerHTML = `<h2>Поточний тест</h2><p class="muted">Жоден тест ще не відкривався. Відкрийте тест — тут з'явиться посилання та QR-код для студентів.</p>`; return; }
-  c.innerHTML = `<h2>Поточний тест</h2>
-    <div class="status ${cfg.active ? "on" : "off"}">${cfg.active ? "● Реєстрацію відкрито" : "● Реєстрацію закрито"}</div>
-    ${cfg.subjectName ? `<div class="pill">${esc(cfg.subjectName)}</div>` : ""}
-    <p class="big-title">${esc(cfg.title)}</p>
-    <p class="muted">Тривалість ${cfg.durationMin} хв${cfg.kind === "seminar" ? ` · питань на студента: ${cfg.qCount || "усі"}` : ` · варіантів: ${cfg.variantCount}`}
-      · групи: ${esc((cfg.groups || []).join(", ") || "будь-які")}</p>
-    <div class="btns">
-      ${cfg.active ? `<button class="btn danger" id="closeBtn">Закрити реєстрацію</button>` : `<button class="btn" id="reopenBtn">Відкрити реєстрацію знову</button>`}
-    </div>
-    <p class="tiny muted">Закриття реєстрації не зупиняє тих, хто вже почав: вони дописують до кінця свого часу. Нові студенти за цим посиланням уже не зайдуть.</p>
-    ${cfg.code ? linkBlock(cfg.code) : ""}`;
-  if (cfg.code) bindLinkBlock(cfg.code);
-  $("#closeBtn")?.addEventListener("click", () => setActive(false).catch(showErr));
-  $("#reopenBtn")?.addEventListener("click", () => setActive(true).catch(showErr));
+  if (!activeList.length) { c.innerHTML = `<h2>Відкриті тести</h2><p class="muted">Зараз немає відкритих тестів. Відкрийте тест — тут з'являться посилання та QR-код для студентів.</p>`; return; }
+  c.innerHTML = `<h2>Відкриті тести <span class="muted tiny">(${activeList.length})</span></h2>
+    <div class="act-list">${activeList.map((x) => {
+      const url = testUrl(x.code), expired = x.mode === "home" && toMs(x.closeAt) < Date.now();
+      return `<div class="act ${x.id === monSid ? "sel" : ""}" data-id="${x.id}">
+        <div class="act-top"><span class="pill">${esc(x.subjectName || "")}</span><span class="tag ${x.mode === "home" ? "home" : ""}">${windowText(x)}${expired ? " · термін минув" : ""}</span></div>
+        <div class="big-title">${esc(x.title)}</div>
+        <div class="tiny muted">Тривалість ${x.durationMin} хв${x.kind === "seminar" ? ` · питань: ${x.qCount || "усі"}` : ` · варіантів: ${x.variantCount}`} · групи: ${esc((x.groups || []).join(", ") || "будь-які")} · зареєстровано: ${x.count}</div>
+        <div class="linkrow"><a href="${url}" target="_blank">${esc(url)}</a></div>
+        <div class="btns">
+          <button class="btn tiny-btn" data-a="copy">Копіювати</button>
+          <button class="btn tiny-btn" data-a="qr">QR-код</button>
+          <button class="btn tiny-btn" data-a="mon">Хто пише</button>
+          ${x.mode === "home" ? `<button class="btn tiny-btn" data-a="term">Змінити термін</button>` : ""}
+          <button class="btn tiny-btn danger" data-a="close">Закрити</button>
+        </div>
+        <div class="qrBox" hidden></div>
+      </div>`; }).join("")}</div>
+    <p class="tiny muted">«Закрити» — нові студенти за посиланням не зайдуть; ті, хто вже почав, дописують до кінця свого часу.</p>`;
+  c.querySelectorAll(".act").forEach((el) => {
+    const x = activeList.find((a) => a.id === el.dataset.id), url = testUrl(x.code);
+    el.querySelector("[data-a=copy]").onclick = async () => { try { await navigator.clipboard.writeText(url); toast("Посилання скопійовано"); } catch { toast(url, 6000); } };
+    el.querySelector("[data-a=qr]").onclick = () => {
+      const box = el.querySelector(".qrBox"); box.hidden = !box.hidden;
+      if (!box.hidden && !box.dataset.done && window.QRCode) { new QRCode(box, { text: url, width: 220, height: 220 }); box.dataset.done = 1; }
+    };
+    el.querySelector("[data-a=mon]").onclick = () => { startMonitor(x.id); renderCurrent(); $("#monCard").scrollIntoView({ behavior: "smooth" }); };
+    el.querySelector("[data-a=close]").onclick = () => { if (confirm(`Закрити «${x.title}»?`)) setActive(false, x).catch(showErr); };
+    el.querySelector("[data-a=term]")?.addEventListener("click", () => editTerm(x));
+  });
+}
+const toLocalInput = (ms) => { const d = new Date(ms - new Date().getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
+function editTerm(x) {
+  const m = modal(`<h2>Термін виконання</h2><p class="muted">${esc(x.title)}</p>
+    <div class="row2"><label>Відкрито з<input type="datetime-local" id="tFrom" value="${toMs(x.openFrom) ? toLocalInput(toMs(x.openFrom)) : ""}"></label>
+    <label>Виконати до<input type="datetime-local" id="tTo" value="${toLocalInput(toMs(x.closeAt))}"></label></div>
+    <div class="modal-btns"><button class="btn" data-x>Скасувати</button><button class="btn primary" id="tSave">Зберегти</button></div>`);
+  $("#tSave").onclick = async () => {
+    const from = $("#tFrom").value ? new Date($("#tFrom").value) : null, to = new Date($("#tTo").value);
+    if (!(to > (from || 0))) return toast("Дата завершення має бути пізніше за дату початку");
+    const batch = writeBatch(db);
+    batch.update(doc(db, "sittings", x.id), { openFrom: from, closeAt: to });
+    batch.update(doc(db, "open", x.code), { openFrom: from, closeAt: to });
+    await batch.commit().catch(showErr); m.remove(); toast("Термін змінено");
+  };
 }
 
 // ---------------------------------------------------------------- open new
@@ -175,12 +197,21 @@ function renderOpen() {
   const c = $("#openCard");
   const subs = subjList().filter((s) => banks.some((b) => b.subjectId === s.id));
   if (!subs.length) { c.innerHTML = `<h2>Відкрити тест</h2><p class="muted">Спочатку додайте предмет і питання (блоки «Предмети» та «Банк питань» нижче).</p>`; return; }
+  const now = Date.now(), weekEnd = new Date(now + 7 * 864e5); weekEnd.setHours(23, 59, 0, 0);
   c.innerHTML = `<h2>Відкрити тест</h2>
     <form id="of">
       <label>Предмет<select name="subj">${subs.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("")}</select></label>
       <div class="row2">
         <label>Розділ<select name="sec"></select></label>
         <label>Заняття<select name="bank" required></select></label>
+      </div>
+      <div class="seg" id="modeSeg">
+        <label><input type="radio" name="mode" value="class" checked> На занятті</label>
+        <label><input type="radio" name="mode" value="home"> Домашнє завдання</label>
+      </div>
+      <div class="row2" id="homeRow" hidden>
+        <label>Відкрито з<input type="datetime-local" name="from" value="${toLocalInput(now)}"></label>
+        <label>Виконати до<input type="datetime-local" name="to" value="${toLocalInput(weekEnd.getTime())}"></label>
       </div>
       <div class="row2">
         <label>Тривалість, хв<input name="dur" type="number" min="1" max="240" value="40" required>
@@ -189,10 +220,17 @@ function renderOpen() {
       </div>
       <label>Групи (через кому)<input name="groups" placeholder="напр. 201-Т, 202-Т"></label>
       <button class="btn primary big">Відкрити тест</button>
-      <p class="tiny muted">Для тематичної варіант кожному студенту видається автоматично, порівну між варіантами.</p>
+      <p class="tiny muted" id="modeHint">Тест відкривається одразу; закриваєте його ви. Для тематичної варіант кожному студенту видається автоматично, порівну між варіантами.</p>
     </form>`;
   const f = $("#of");
   const cur = () => banks.find((x) => x.id === f.bank.value);
+  const mode = () => f.querySelector("input[name=mode]:checked").value;
+  f.querySelectorAll("input[name=mode]").forEach((r) => (r.onchange = () => {
+    $("#homeRow").hidden = mode() !== "home";
+    $("#modeHint").textContent = mode() === "home"
+      ? "Студент може почати тест будь-коли в цьому проміжку; після початку в нього є «Тривалість» хвилин, але не довше, ніж до кінцевого терміну."
+      : "Тест відкривається одразу; закриваєте його ви. Для тематичної варіант кожному студенту видається автоматично, порівну між варіантами.";
+  }));
   const fillSec = () => {
     const secs = [...new Set(banks.filter((b) => b.subjectId === f.subj.value).map((b) => b.section))];
     f.sec.innerHTML = secs.map((s) => `<option>${esc(s)}</option>`).join("");
@@ -221,22 +259,27 @@ function renderOpen() {
     const durationMin = Math.max(1, parseInt(f.dur.value, 10));
     const qCount = b.kind === "seminar" ? Math.max(0, parseInt(f.qc.value, 10) || 0) : 0;
     const groups = f.groups.value.split(",").map((s) => s.trim()).filter(Boolean);
-    if (cfg.active && !confirm("Зараз відкрито інший тест. Закрити його реєстрацію і відкрити новий?")) return;
+    const m = mode();
+    let openFrom = null, closeAt = null;
+    if (m === "home") {
+      openFrom = f.from.value ? new Date(f.from.value) : null; closeAt = new Date(f.to.value);
+      if (!(closeAt.getTime() > Date.now())) return toast("Кінцевий термін має бути в майбутньому");
+      if (openFrom && !(closeAt > openFrom)) return toast("Кінцевий термін має бути пізніше за початок");
+    }
     const btn = f.querySelector("button.primary"); btn.disabled = true; btn.textContent = "Відкриваю…";
     try {
-      if (cfg.active) await setActive(false);
       const iv = await bankItems(b);
       const sref = doc(collection(db, "sittings"));
       const code = makeCode();
       const common = { testId: b.id, title: fullTitle(b), subjectName: subjName(b.subjectId), kind: b.kind, durationMin, qCount,
-        itemCount: iv[1].length, variantCount: b.variantCount, groups };
+        itemCount: iv[1].length, variantCount: b.variantCount, groups, mode: m, openFrom, closeAt };
       const batch = writeBatch(db);
       for (let v = 1; v <= b.variantCount; v++) batch.set(doc(db, "sittings", sref.id, "variants", String(v)), { items: iv[v] });
       batch.set(sref, { ...common, code, active: true, count: 0, offset: Math.floor(Math.random() * b.variantCount), createdAt: serverTimestamp() });
       batch.set(doc(db, "open", code), { ...common, active: true, sittingId: sref.id });
-      batch.set(doc(db, "config", "current"), { ...common, code, active: true, sittingId: sref.id, openedAt: serverTimestamp() });
       await batch.commit();
-      toast("Тест відкрито. Дайте студентам нове посилання або QR-код.");
+      monSid = null; startMonitor(sref.id);
+      toast("Тест відкрито. Дайте студентам посилання або QR-код (блок «Відкриті тести»).", 4000);
       renderExport();
     } catch (err) { showErr(err); }
     btn.disabled = false; btn.textContent = "Відкрити тест";
@@ -245,13 +288,14 @@ function renderOpen() {
 
 // ---------------------------------------------------------------- monitor
 async function startMonitor(sid) {
-  if (sid === monSid) return;
+  if (sid === monSid && sid) return;
   monSid = sid; unsubMon?.(); clearInterval(monTimer);
   const c = $("#monCard");
-  if (!sid) { c.innerHTML = `<h2>Хто пише зараз</h2><p class="muted">Немає активного тесту.</p>`; return; }
+  if (!sid) { c.innerHTML = `<h2>Хто пише</h2><p class="muted">Немає відкритих тестів.</p>`; return; }
   const sit = (await getDoc(doc(db, "sittings", sid))).data();
   monItems = await loadSittingItems(sit, sid);
-  c.innerHTML = `<div class="mon-head"><h2>Хто пише зараз</h2><span class="muted" id="monCount"></span></div>
+  c.innerHTML = `<div class="mon-head"><h2>Хто пише</h2><span class="muted" id="monCount"></span></div>
+    <div class="tiny muted">${esc(sit.subjectName || "")} · ${esc(sit.title)} · ${windowText(sit)}${sit.active ? "" : " · закрито"}</div>
     <div class="table-wrap"><table class="tbl"><thead><tr>
       <th>#</th><th>Група</th><th>ПІБ</th><th>Вар.</th><th>Почав</th><th>Статус</th><th>Відповіді</th>
       <th title="Виходи з вікна">Вих.</th><th title="Спроби вставлення">Вст.</th><th title="Копіювання / знімки екрана">Коп./скр.</th><th></th>
@@ -271,7 +315,7 @@ function paintMonitor(sid, sit) {
     const items = pickItems(r, monItems);
     const n = items.filter((q) => isAnswered(q, r.answers?.[q.id])).length;
     const st = r.startedAt?.toMillis?.() || now;
-    const left = st + sit.durationMin * 60000 - now;
+    const left = Math.min(st + sit.durationMin * 60000, toMs(sit.closeAt) || Infinity) - now;
     const status = r.submitted ? `<span class="ok">Здано ${time(r.submittedAt)}</span>` : left <= 0 ? `<span class="bad">Час вийшов</span>` : `Пише · ${fmtTime(left)}`;
     const ev = r.events || {};
     const flag = (v) => (v > 0 ? `<b class="bad">${v}</b>` : "0");
@@ -309,11 +353,12 @@ async function renderExport() {
   const snap = await getDocs(query(collection(db, "sittings"), orderBy("createdAt", "desc"), limit(80)));
   const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   c.innerHTML = `<h2>Вивантажити відповіді</h2>
-    ${list.length ? `<label>Тест<select id="expSel">${list.map((s) => `<option value="${s.id}">${esc(dt(s.createdAt))} — ${esc((s.subjectName ? s.subjectName.slice(0, 25) + " · " : "") + s.title.slice(0, 70))} (${s.count} студ.)</option>`).join("")}</select></label>
-    <button class="btn primary" id="expBtn">Завантажити Excel</button>
+    ${list.length ? `<label>Тест<select id="expSel">${list.map((s) => `<option value="${s.id}">${esc(dt(s.createdAt))}${s.mode === "home" ? " [дом.]" : ""} — ${esc((s.subjectName ? s.subjectName.slice(0, 25) + " · " : "") + s.title.slice(0, 70))} (${s.count} студ.)</option>`).join("")}</select></label>
+    <div class="btns"><button class="btn primary" id="expBtn">Завантажити Excel</button><button class="btn" id="monBtn">Хто писав</button></div>
     <p class="tiny muted">Файл містить питання й відповіді кожного студента. Цей файл передайте Claude на перевірку.</p>`
     : `<p class="muted">Ще немає проведених тестів.</p>`}`;
   $("#expBtn")?.addEventListener("click", () => exportXlsx($("#expSel").value).catch(showErr));
+  $("#monBtn")?.addEventListener("click", () => { startMonitor($("#expSel").value); renderCurrent(); $("#monCard").scrollIntoView({ behavior: "smooth" }); });
 }
 const dt = (ts) => (ts?.toDate ? ts.toDate().toLocaleString("uk-UA", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "");
 
@@ -475,6 +520,7 @@ function openEditor(b) {
     id: b?.id || null, subjectId: b ? (b.subjectId === NO_SUBJ ? subjects[0]?.id : b.subjectId) : (bankSubject !== NO_SUBJ ? bankSubject : subjects[0]?.id),
     section: b?.section || "", title: b?.title || "", kind: b?.kind || "seminar", variants: { 1: [] }, v: 1,
   };
+  const secsOf = (sid) => [...new Set(banks.filter((x) => x.subjectId === sid).map((x) => x.section))];
   const m = modal(`<div class="editor"><div class="spinner"></div></div>`, "wide");
   const box = m.querySelector(".editor");
   (async () => {
@@ -488,7 +534,6 @@ function openEditor(b) {
     draw();
   })().catch(showErr);
 
-  const secsOf = (sid) => [...new Set(banks.filter((x) => x.subjectId === sid).map((x) => x.section))];
   function draw() {
     const items = st.variants[st.v] || (st.variants[st.v] = []);
     const vk = Object.keys(st.variants);
