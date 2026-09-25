@@ -63,28 +63,41 @@ async function loadBanks() {
 }
 
 // ---------------------------------------------------------------- current
-const STUDENT_URL = location.href.replace(/teacher\.html.*$/, "").replace(/[?#].*$/, "");
-function linkBlock() {
+const BASE_URL = location.href.replace(/teacher\.html.*$/, "").replace(/[?#].*$/, "");
+const testUrl = (code) => `${BASE_URL}?t=${code}`;
+function linkBlock(code) {
+  const url = testUrl(code);
   return `<div class="linkbox">
-    <div class="tiny muted">Посилання для студентів</div>
-    <div class="linkrow"><a href="${STUDENT_URL}" target="_blank" id="stuLink">${esc(STUDENT_URL)}</a>
+    <div class="tiny muted">Посилання для студентів — діє лише для цього тесту</div>
+    <div class="linkrow"><a href="${url}" target="_blank" id="stuLink">${esc(url)}</a>
       <button class="btn small" id="copyLink">Копіювати</button>
       <button class="btn small" id="qrBtn">QR-код</button></div>
     <div id="qrBox" hidden></div>
   </div>`;
 }
-function bindLinkBlock() {
-  $("#copyLink").onclick = async () => { try { await navigator.clipboard.writeText(STUDENT_URL); toast("Посилання скопійовано"); } catch { toast(STUDENT_URL, 6000); } };
+function bindLinkBlock(code) {
+  const url = testUrl(code);
+  $("#copyLink").onclick = async () => { try { await navigator.clipboard.writeText(url); toast("Посилання скопійовано"); } catch { toast(url, 6000); } };
   $("#qrBtn").onclick = () => {
     const box = $("#qrBox"); box.hidden = !box.hidden;
-    if (!box.hidden && !box.dataset.done && window.QRCode) { new QRCode(box, { text: STUDENT_URL, width: 220, height: 220 }); box.dataset.done = 1; }
+    if (!box.hidden && !box.dataset.done && window.QRCode) { new QRCode(box, { text: url, width: 240, height: 240 }); box.dataset.done = 1; }
   };
+}
+
+// увімкнути / вимкнути реєстрацію одночасно в усіх місцях
+async function setActive(active, c = cfg) {
+  if (!c.sittingId) return;
+  const batch = writeBatch(db);
+  batch.update(doc(db, "config", "current"), { active });
+  batch.update(doc(db, "sittings", c.sittingId), { active });
+  if (c.code) batch.update(doc(db, "open", c.code), { active });
+  await batch.commit();
 }
 
 function renderCurrent() {
   const c = $("#curCard");
   const gi = $("#of input[name=groups]"); if (gi && !gi.value && cfg.groups?.length) gi.value = cfg.groups.join(", ");
-  if (!cfg.sittingId) { c.innerHTML = `<h2>Поточний тест</h2><p class="muted">Жоден тест ще не відкривався.</p>${linkBlock()}`; bindLinkBlock(); return; }
+  if (!cfg.sittingId) { c.innerHTML = `<h2>Поточний тест</h2><p class="muted">Жоден тест ще не відкривався. Відкрийте тест — тут з'явиться посилання та QR-код для студентів.</p>`; return; }
   c.innerHTML = `<h2>Поточний тест</h2>
     <div class="status ${cfg.active ? "on" : "off"}">${cfg.active ? "● Реєстрацію відкрито" : "● Реєстрацію закрито"}</div>
     <p class="big-title">${esc(cfg.title)}</p>
@@ -95,11 +108,11 @@ function renderCurrent() {
         ? `<button class="btn danger" id="closeBtn">Закрити реєстрацію</button>`
         : `<button class="btn" id="reopenBtn">Відкрити реєстрацію знову</button>`}
     </div>
-    <p class="tiny muted">Закриття реєстрації не зупиняє тих, хто вже почав: вони дописують до кінця свого часу.</p>
-    ${linkBlock()}`;
-  bindLinkBlock();
-  $("#closeBtn")?.addEventListener("click", () => updateDoc(doc(db, "config", "current"), { active: false }));
-  $("#reopenBtn")?.addEventListener("click", () => updateDoc(doc(db, "config", "current"), { active: true }));
+    <p class="tiny muted">Закриття реєстрації не зупиняє тих, хто вже почав: вони дописують до кінця свого часу. Нові студенти за цим посиланням уже не зайдуть.</p>
+    ${cfg.code ? linkBlock(cfg.code) : ""}`;
+  if (cfg.code) bindLinkBlock(cfg.code);
+  $("#closeBtn")?.addEventListener("click", () => setActive(false).catch(showErr));
+  $("#reopenBtn")?.addEventListener("click", () => setActive(true).catch(showErr));
 }
 
 // ---------------------------------------------------------------- open new
@@ -133,11 +146,25 @@ function renderOpen() {
     const qCount = b.kind === "seminar" ? Math.max(0, parseInt(f.qc.value, 10) || 0) : 0;
     const groups = f.groups.value.split(",").map((s) => s.trim()).filter(Boolean);
     if (cfg.active && !confirm("Зараз відкрито інший тест. Закрити його реєстрацію і відкрити новий?")) return;
-    const sref = doc(collection(db, "sittings"));
-    const common = { testId: b.id, title: b.title, kind: b.kind, durationMin, qCount, itemCount: b.itemCount, variantCount: b.variantCount, groups };
-    await setDoc(sref, { ...common, count: 0, offset: Math.floor(Math.random() * b.variantCount), createdAt: serverTimestamp() });
-    await setDoc(doc(db, "config", "current"), { ...common, active: true, sittingId: sref.id, openedAt: serverTimestamp() });
-    toast("Тест відкрито. Студенти можуть заходити на сайт.");
+    const btn = f.querySelector("button"); btn.disabled = true; btn.textContent = "Відкриваю…";
+    try {
+      if (cfg.active) await setActive(false);
+      const sref = doc(collection(db, "sittings"));
+      const code = makeCode();
+      const common = { testId: b.id, title: b.title, kind: b.kind, durationMin, qCount, itemCount: b.itemCount, variantCount: b.variantCount, groups };
+      // копія питань саме для цього тесту (студент читає лише свій варіант)
+      const batch = writeBatch(db);
+      for (let v = 1; v <= b.variantCount; v++) {
+        const src = await getDoc(doc(db, "banks", b.id, "variants", String(v)));
+        batch.set(doc(db, "sittings", sref.id, "variants", String(v)), { items: src.data().items });
+      }
+      batch.set(sref, { ...common, code, active: true, count: 0, offset: Math.floor(Math.random() * b.variantCount), createdAt: serverTimestamp() });
+      batch.set(doc(db, "open", code), { ...common, active: true, sittingId: sref.id });
+      batch.set(doc(db, "config", "current"), { ...common, code, active: true, sittingId: sref.id, openedAt: serverTimestamp() });
+      await batch.commit();
+    } catch (err) { btn.disabled = false; btn.textContent = "Відкрити тест"; return showErr(err); }
+    btn.disabled = false; btn.textContent = "Відкрити тест";
+    toast("Тест відкрито. Дайте студентам нове посилання або QR-код.");
     renderExport();
   };
 }
@@ -149,7 +176,7 @@ async function startMonitor(sid) {
   const c = $("#monCard");
   if (!sid) { c.innerHTML = `<h2>Хто пише зараз</h2><p class="muted">Немає активного тесту.</p>`; return; }
   const sit = (await getDoc(doc(db, "sittings", sid))).data();
-  monItems = await loadItems(sit.testId, sit.variantCount);
+  monItems = await loadItems(sit.testId, sit.variantCount, sid);
   c.innerHTML = `<div class="mon-head"><h2>Хто пише зараз</h2><span class="muted" id="monCount"></span></div>
     <div class="table-wrap"><table class="tbl"><thead><tr>
       <th>#</th><th>Група</th><th>ПІБ</th><th>Вар.</th><th>Почав</th><th>Статус</th><th>Відповіді</th>
@@ -191,14 +218,16 @@ function paintMonitor(sid, sit) {
 
 const time = (ts) => (ts?.toDate ? ts.toDate().toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" }) : "—");
 
-async function loadItems(testId, variantCount) {
+async function loadItems(testId, variantCount, sid) {
   const out = {};
   for (let v = 1; v <= variantCount; v++) {
-    const s = await getDoc(doc(db, "banks", testId, "variants", String(v)));
+    let s = sid ? await getDoc(doc(db, "sittings", sid, "variants", String(v))) : null;
+    if (!s || !s.exists()) s = await getDoc(doc(db, "banks", testId, "variants", String(v)));
     out[v] = s.exists() ? s.data().items : [];
   }
   return out;
 }
+const makeCode = () => { const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s = ""; for (let i = 0; i < 6; i++) s += A[Math.floor(Math.random() * A.length)]; return s; };
 function pickItems(r, itemsByVariant) {
   const all = itemsByVariant[r.variant] || [];
   return r.qids ? r.qids.map((id) => all.find((q) => q.id === id)).filter(Boolean) : all;
@@ -222,7 +251,7 @@ async function exportXlsx(sid) {
   const sit = (await getDoc(doc(db, "sittings", sid))).data();
   const sessions = (await getDocs(collection(db, "sittings", sid, "sessions"))).docs.map((d) => d.data())
     .sort((a, b) => (a.group + a.name).localeCompare(b.group + b.name, "uk"));
-  const iv = await loadItems(sit.testId, sit.variantCount);
+  const iv = await loadItems(sit.testId, sit.variantCount, sid);
   const typeName = { choice: "тест", match: "відповідність", seq: "послідовність", open: "відкрите" };
 
   const answersRows = [["Група", "ПІБ", "Варіант", "№", "ID питання", "Тип", "Питання", "Відповідь студента"]];

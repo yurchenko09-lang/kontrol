@@ -13,32 +13,33 @@ let answers = {}, deadline = 0, clockOffset = 0, tick = null, saveTimer = null;
 let finished = false, started = false;
 
 // ---------------------------------------------------------------- start
+const CODE = (new URLSearchParams(location.search).get("t") || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
 init().catch((e) => fatal(e));
 
+
 async function init() {
+  if (!CODE) return showMsg("Відкрийте посилання на тест", "Скористайтеся посиланням або QR-кодом, які дав викладач на цьому занятті.");
   await signInAnonymously(auth);
   uid = auth.currentUser.uid;
-  onSnapshot(doc(db, "config", "current"), (snap) => {
-    cfg = snap.data() || { active: false };
+  onSnapshot(doc(db, "open", CODE), (snap) => {
+    if (!snap.exists()) { if (!started) showMsg("Посилання недійсне", "Перевірте посилання або попросіть у викладача нове."); return; }
+    cfg = snap.data();
     if (!started) route();
   }, (e) => fatal(e));
 }
 
 async function route() {
-  if (!cfg.sittingId) return showClosed();
-  // чи вже є сесія цього браузера в поточному тесті?
+  // чи вже є сесія цього браузера в цьому тесті?
   sessRef = doc(db, "sittings", cfg.sittingId, "sessions", uid);
   let snap;
   try { snap = await getDoc(sessRef); } catch { snap = null; }
   if (snap && snap.exists()) return resume(snap.data());
-  if (!cfg.active) return showClosed();
+  if (!cfg.active) return showMsg("Реєстрацію на цей тест закрито", "Якщо ви ще не проходили тест — зверніться до викладача.");
   showRegister();
 }
 
-function showClosed() {
-  app.innerHTML = `<div class="card center">
-    <h1>Зараз немає відкритого тесту</h1>
-    <p class="muted">Дочекайтеся, коли викладач відкриє доступ. Сторінка оновиться автоматично.</p></div>`;
+function showMsg(title, text) {
+  app.innerHTML = `<div class="card center"><h1>${esc(title)}</h1><p class="muted">${esc(text)}</p></div>`;
 }
 
 function showRegister() {
@@ -139,7 +140,7 @@ async function resume(data, fresh = false) {
   if (now() >= deadline) return showDone(true);
 
   let v;
-  try { v = await getDoc(doc(db, "banks", cfg.testId, "variants", String(data.variant))); }
+  try { v = await getDoc(doc(db, "sittings", cfg.sittingId, "variants", String(data.variant))); }
   catch (e) { return fatal(e); }
   const all = v.data().items;
   items = data.qids ? data.qids.map((id) => all.find((q) => q.id === id)).filter(Boolean) : all;
